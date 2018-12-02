@@ -24,17 +24,23 @@ using namespace std;
 const string INPUT_FILE_NAME = "input.txt";
 const string OUTPUT_FILE_NAME = "output.txt";
 
-const int INVALID_NODE_DEPTH = -1;
-const int TREE_ROOT_NODE_DEPTH = 1;
-const int ZERO_CHAR = '0';
-const int DIRECTIONS_COUNT = 8;
-const int BYTE_SIZE = 8;
-const int PAIR = 2;
-const int EDGE_WEIGHT = 1;
-const int MINDIJSKTRA_DIST = 0;
+constexpr int INVALID_NODE_DEPTH = -1;
+constexpr int TREE_ROOT_NODE_DEPTH = 1;
+constexpr int ZERO_CHAR = '0';
+constexpr int DIRECTIONS_COUNT = 8;
+constexpr int BYTE_SIZE = 8;
+constexpr int PAIR = 2;
+constexpr int EDGE_WEIGHT = 1;
+constexpr int MINDIJSKTRA_DIST = 0;
+constexpr int TWO_GATEWAYS = 2;
+
+enum class NodeFlags : uint8_t {
+	MutipleGatewaysChildren		= 0b0000'0001,
+	GateWay						= 0b0000'0010,
+};
 
 typedef int NodeId;
-const NodeId INVALID_ID = -1;
+constexpr NodeId INVALID_ID = -1;
 
 typedef vector<NodeId> MinDijsktraPath;
 
@@ -51,7 +57,6 @@ public:
 		bool explored,
 		bool inFrontier,
 		int dijkstraMinDistance,
-		bool isGateway,
 		MinDijsktraPath minDijsktraPath
 	);
 
@@ -85,10 +90,6 @@ public:
 		return dijkstraMinDistance;
 	}
 
-	bool getIsGateway() const {
-		return isGateway;
-	}
-
 	MinDijsktraPath getMinDijsktraPath() const {
 		return minDijsktraPath;
 	}
@@ -100,8 +101,11 @@ public:
 	void setExplored(bool explored) { this->explored = explored; }
 	void setInFrontier(bool inFrontier) { this->inFrontier = inFrontier; }
 	void setDijkstraMinDistance(int dijkstraMinDistance) { this->dijkstraMinDistance = dijkstraMinDistance; }
-	void setIsGateway(bool isGateway) { this->isGateway = isGateway; }
 	void setMinDijsktraPath(const MinDijsktraPath& minDijsktraPath) { this->minDijsktraPath = minDijsktraPath; }
+	void setFlag(const NodeFlags flag);
+	void unsetFlag(const NodeFlags flag);
+
+	bool hasFlag(const NodeFlags flag) const;
 
 private:
 	NodeId id;
@@ -110,11 +114,11 @@ private:
 	bool rootNote;
 	bool explored;
 	bool inFrontier;
-	int dijkstraMinDistance;
-	MinDijsktraPath minDijsktraPath;
+	uint8_t flags;
 
 	/// Game specific members
-	bool isGateway;
+	int dijkstraMinDistance;
+	MinDijsktraPath minDijsktraPath;
 };
 
 //*************************************************************************************************************
@@ -128,8 +132,8 @@ Node::Node() :
 	explored(false),
 	inFrontier(false),
 	dijkstraMinDistance(INT_MAX),
-	isGateway(false),
-	minDijsktraPath()
+	minDijsktraPath(),
+	flags(0)
 {
 
 }
@@ -145,8 +149,8 @@ Node::Node(NodeId id) :
 	explored(false),
 	inFrontier(false),
 	dijkstraMinDistance(INT_MAX),
-	isGateway(false),
-	minDijsktraPath()
+	minDijsktraPath(),
+	flags(0)
 {
 
 }
@@ -162,7 +166,6 @@ Node::Node(
 	bool explored,
 	bool inFrontier,
 	int dijkstraMinDistance,
-	bool isGateway,
 	MinDijsktraPath minDijsktraPath
 ) :
 	id(id),
@@ -172,8 +175,8 @@ Node::Node(
 	explored(explored),
 	inFrontier(inFrontier),
 	dijkstraMinDistance(dijkstraMinDistance),
-	isGateway(isGateway),
-	minDijsktraPath(minDijsktraPath)
+	minDijsktraPath(minDijsktraPath),
+	flags(0)
 {
 
 }
@@ -183,6 +186,27 @@ Node::Node(
 
 Node::~Node() {
 
+}
+
+//*************************************************************************************************************
+//*************************************************************************************************************
+
+void Node::setFlag(const NodeFlags flag) {
+	flags |= static_cast<uint8_t>(flag);
+}
+
+//*************************************************************************************************************
+//*************************************************************************************************************
+
+void Node::unsetFlag(const NodeFlags flag) {
+	flags &= ~(static_cast<uint8_t>(flag));
+}
+
+//*************************************************************************************************************
+//*************************************************************************************************************
+
+bool Node::hasFlag(const NodeFlags flag) const {
+	return (flags & static_cast<uint8_t>(flag));
 }
 
 //*************************************************************************************************************
@@ -254,7 +278,9 @@ public:
 	NodeId popMinDistChildInForntier(DijsktraFrontier& frontier) const;
 
 	/// Game specific members
-	MinDijsktraPath findClosestGateway() const;
+	MinDijsktraPath findClosestFlaggedNode(const NodeFlags flag) const;
+
+	void markDoubleGatewayNodes();
 
 private:
 	int nodesCount;
@@ -647,7 +673,7 @@ void Graph::deleteEdge(NodeId parentId, NodeId childId) {
 
 void Graph::createNode(NodeId nodeId, int nodeDepth, NodeId parentId) {
 	if (!nodeCreated(nodeId)) {
-		Node* node = new Node(nodeId, nodeDepth, parentId, false, false, false, INT_MAX, false, MinDijsktraPath());
+		Node* node = new Node(nodeId, nodeDepth, parentId, false, false, false, INT_MAX, MinDijsktraPath());
 		idNodeMap[nodeId] = node;
 		graph[nodeId];
 		++nodesCount;
@@ -672,14 +698,14 @@ bool Graph::nodeCreated(NodeId nodeId) const {
 //*************************************************************************************************************
 //*************************************************************************************************************
 
-MinDijsktraPath Graph::findClosestGateway() const {
+MinDijsktraPath Graph::findClosestFlaggedNode(const NodeFlags flag) const {
 	int minDistToGateway = INT_MAX;
 
 	MinDijsktraPath res;
 
 	for (auto& node : idNodeMap) {
 		Node* nodePtr = node.second;
-		if (nodePtr->getIsGateway()) {
+		if (nodePtr->hasFlag(flag)) {
 			int nodeDijsktraDist = nodePtr->getDijkstraMinDistance();
 			if (nodeDijsktraDist < minDistToGateway) {
 				minDistToGateway = nodeDijsktraDist;
@@ -689,6 +715,36 @@ MinDijsktraPath Graph::findClosestGateway() const {
 	}
 
 	return res;
+}
+
+//*************************************************************************************************************
+//*************************************************************************************************************
+
+void Graph::markDoubleGatewayNodes() {
+	for (const pair<NodeId, Node*>& node : idNodeMap) {
+		Node* nodePtr = node.second;
+		if (!nodePtr->hasFlag(NodeFlags::GateWay)) {
+			NodeId parentId = nodePtr->getId();
+			const ChildrenList& children = graph[parentId];
+
+			int gatewayChildrenCount = 0;
+
+			for (NodeId childId : children) {
+				Node* childNode = idNodeMap[childId];
+
+				if (childNode->hasFlag(NodeFlags::GateWay)) {
+					++gatewayChildrenCount;
+				}
+			}
+
+			if (gatewayChildrenCount >= TWO_GATEWAYS) {
+				nodePtr->setFlag(NodeFlags::MutipleGatewaysChildren);
+			}
+			else {
+				nodePtr->unsetFlag(NodeFlags::MutipleGatewaysChildren);
+			}
+		}
+	}
 }
 
 //-------------------------------------------------------------------------------------------------------------
@@ -801,7 +857,7 @@ void Game::getGameInput() {
 		cerr << EI << endl;
 #endif
 
-		skynetNetwork.getNode(EI)->setIsGateway(true);
+		skynetNetwork.getNode(EI)->setFlag(NodeFlags::GateWay);
 	}
 }
 
@@ -823,6 +879,7 @@ void Game::getTurnInput() {
 //*************************************************************************************************************
 
 void Game::turnBegin() {
+	skynetNetwork.markDoubleGatewayNodes();
 }
 
 //*************************************************************************************************************
@@ -831,9 +888,13 @@ void Game::turnBegin() {
 void Game::makeTurn() {
 	skynetNetwork.dijsktra(agentNodeId);
 
-	MinDijsktraPath minGatewayPath = skynetNetwork.findClosestGateway();
+	MinDijsktraPath minGatewayPath = skynetNetwork.findClosestFlaggedNode(NodeFlags::GateWay);
 	NodeId firstToDelete = minGatewayPath[minGatewayPath.size() - 2];
 	NodeId secondToDelete = minGatewayPath.back();
+
+	if (minGatewayPath.size() > 1) {
+
+	}
 
 	cout << firstToDelete << " " << secondToDelete << endl;
 
