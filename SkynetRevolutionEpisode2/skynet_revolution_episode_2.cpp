@@ -39,6 +39,7 @@ constexpr int GAMEOVER_NODES_COUNT = 2;
 enum class NodeFlags : uint8_t {
 	MutipleGatewaysChildren		= 0b0000'0001,
 	GateWay						= 0b0000'0010,
+	OneGatewaysChild			= 0b0000'0100,
 };
 
 typedef int NodeId;
@@ -106,6 +107,7 @@ public:
 	void setMinDijsktraPath(const MinDijsktraPath& minDijsktraPath) { this->minDijsktraPath = minDijsktraPath; }
 	void setFlag(const NodeFlags flag);
 	void unsetFlag(const NodeFlags flag);
+	void resetGatewayChildrenFlags();
 
 	bool hasFlag(const NodeFlags flag) const;
 
@@ -207,6 +209,14 @@ void Node::unsetFlag(const NodeFlags flag) {
 //*************************************************************************************************************
 //*************************************************************************************************************
 
+void Node::resetGatewayChildrenFlags() {
+	unsetFlag(NodeFlags::MutipleGatewaysChildren);
+	unsetFlag(NodeFlags::OneGatewaysChild);
+}
+
+//*************************************************************************************************************
+//*************************************************************************************************************
+
 bool Node::hasFlag(const NodeFlags flag) const {
 	return (flags & static_cast<uint8_t>(flag));
 }
@@ -267,7 +277,13 @@ public:
 	bool nodeCreated(NodeId nodeId) const;
 	void deleteAllNodes();
 	vector<NodeId> treeRootsIds() const;
-	void dfs(NodeId treeRootNodeId);
+
+	void dfs(
+		NodeId treeRootNodeId,
+		NodeId& firstToDelete,
+		NodeId& secondToDelete
+	);
+
 	void bfs(NodeId treeRootNodeId);
 	int getMaxNodeDepth() const;
 	bool edgeExists(NodeId parent, NodeId child) const;
@@ -283,6 +299,11 @@ public:
 	MinDijsktraPath findClosestFlaggedNode(const NodeFlags flag) const;
 	NodeId getGatewayChild(const NodeId parent) const;
 	void markMultipleGatewayNodes();
+	void findDoubleLinkOnDeathPath(
+		const NodeId nodeOneBeforeGateWay,
+		NodeId& firstToDelete,
+		NodeId& secondToDelete
+	);
 
 private:
 	int nodesCount;
@@ -373,7 +394,11 @@ vector<NodeId> Graph::treeRootsIds() const {
 //*************************************************************************************************************
 //*************************************************************************************************************
 
-void Graph::dfs(NodeId treeRootNodeId) {
+void Graph::dfs(
+	NodeId treeRootNodeId,
+	NodeId& firstToDelete,
+	NodeId& secondToDelete
+) {
 	getNode(treeRootNodeId)->setNodeDepth(TREE_ROOT_NODE_DEPTH);
 
 	NodeStack frontier;
@@ -381,7 +406,8 @@ void Graph::dfs(NodeId treeRootNodeId) {
 	frontier.push_back(treeRootNodeId);
 	idNodeMap[treeRootNodeId]->setInFrontier(true);
 
-	while (!frontier.empty()) {
+	bool foundDoubleLink = false;
+	while (!frontier.empty() && !foundDoubleLink) {
 		NodeId state = frontier.back();
 		frontier.pop_back();
 		idNodeMap[treeRootNodeId]->setInFrontier(false);
@@ -392,14 +418,25 @@ void Graph::dfs(NodeId treeRootNodeId) {
 		for (size_t childIdx = 0; childIdx < children->size(); ++childIdx) {
 			NodeId childId = children->at(childIdx);
 
+			if (!idNodeMap[childId]->hasFlag(NodeFlags::OneGatewaysChild) && !idNodeMap[childId]->hasFlag(NodeFlags::MutipleGatewaysChildren)) {
+				continue;
+			}
+			else if (idNodeMap[childId]->hasFlag(NodeFlags::MutipleGatewaysChildren)) {
+				firstToDelete = childId;
+				secondToDelete = getGatewayChild(childId);
+				foundDoubleLink = true;
+				break;
+			}
+
 			bool nodeExplored = idNodeMap[childId]->getExplored();
 			bool nodeInFrontier = idNodeMap[childId]->getInFrontier();
 			if (!nodeExplored && !nodeInFrontier) {
 				frontier.push_back(childId);
+				idNodeMap[childId]->setInFrontier(true);
 
-				int parentDepth = idNodeMap[state]->getNodeDepth();
-				idNodeMap[childId]->setNodeDepth(parentDepth + 1);
-				idNodeMap[childId]->setParentId(state);
+				//int parentDepth = idNodeMap[state]->getNodeDepth();
+				//idNodeMap[childId]->setNodeDepth(parentDepth + 1);
+				//idNodeMap[childId]->setParentId(state);
 			}
 		}
 	}
@@ -756,14 +793,28 @@ void Graph::markMultipleGatewayNodes() {
 				}
 			}
 
-			if (gatewayChildrenCount >= TWO_GATEWAYS) {
-				nodePtr->setFlag(NodeFlags::MutipleGatewaysChildren);
+			nodePtr->resetGatewayChildrenFlags();
+
+			if (1 == gatewayChildrenCount) {
+				nodePtr->setFlag(NodeFlags::OneGatewaysChild);
 			}
-			else {
-				nodePtr->unsetFlag(NodeFlags::MutipleGatewaysChildren);
+			else if (gatewayChildrenCount >= TWO_GATEWAYS) {
+				nodePtr->setFlag(NodeFlags::MutipleGatewaysChildren);
 			}
 		}
 	}
+}
+
+//*************************************************************************************************************
+//*************************************************************************************************************
+
+void Graph::findDoubleLinkOnDeathPath(
+	const NodeId nodeOneBeforeGateWay,
+	NodeId& firstToDelete,
+	NodeId& secondToDelete
+) {
+	graphResetAlgParams();
+	dfs(nodeOneBeforeGateWay, firstToDelete, secondToDelete);
 }
 
 //-------------------------------------------------------------------------------------------------------------
@@ -908,14 +959,17 @@ void Game::makeTurn() {
 	skynetNetwork.dijsktra(agentNodeId);
 
 	MinDijsktraPath minGatewayPath = skynetNetwork.findClosestFlaggedNode(NodeFlags::GateWay);
-	MinDijsktraPath minMultiGatewaysPath = skynetNetwork.findClosestFlaggedNode(NodeFlags::MutipleGatewaysChildren);
-	const size_t minMultiGatewaysPathSize = minMultiGatewaysPath.size();
+	MinDijsktraPath minDoubleGatewayPath = skynetNetwork.findClosestFlaggedNode(NodeFlags::MutipleGatewaysChildren);
 
 	NodeId firstToDelete = minGatewayPath[minGatewayPath.size() - 2];
 	NodeId secondToDelete = minGatewayPath.back();
 
-	if (minMultiGatewaysPathSize > 0 && (minMultiGatewaysPath.size() <= minGatewayPath.size())) {
-		firstToDelete = minMultiGatewaysPath.back();
+	if (3 == minGatewayPath.size()) {
+		const NodeId nodeOneBeforeGateWay = minGatewayPath[1];
+		skynetNetwork.findDoubleLinkOnDeathPath(nodeOneBeforeGateWay, firstToDelete, secondToDelete);
+	}
+	else if (minDoubleGatewayPath.size() > 0 && minGatewayPath.size() > 2) {
+		firstToDelete = minDoubleGatewayPath.back();
 		secondToDelete = skynetNetwork.getGatewayChild(firstToDelete);
 	}
 
