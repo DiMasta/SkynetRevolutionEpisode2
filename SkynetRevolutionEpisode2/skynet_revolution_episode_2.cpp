@@ -33,6 +33,8 @@ constexpr int PAIR = 2;
 constexpr int EDGE_WEIGHT = 1;
 constexpr int MINDIJSKTRA_DIST = 0;
 constexpr int TWO_GATEWAYS = 2;
+constexpr int GAMEOVER_NODES_COUNT = 2;
+
 
 enum class NodeFlags : uint8_t {
 	MutipleGatewaysChildren		= 0b0000'0001,
@@ -279,8 +281,8 @@ public:
 
 	/// Game specific members
 	MinDijsktraPath findClosestFlaggedNode(const NodeFlags flag) const;
-
-	void markDoubleGatewayNodes();
+	NodeId getGatewayChild(const NodeId parent) const;
+	void markMultipleGatewayNodes();
 
 private:
 	int nodesCount;
@@ -720,7 +722,24 @@ MinDijsktraPath Graph::findClosestFlaggedNode(const NodeFlags flag) const {
 //*************************************************************************************************************
 //*************************************************************************************************************
 
-void Graph::markDoubleGatewayNodes() {
+NodeId Graph::getGatewayChild(const NodeId parent) const {
+	NodeId gatewayChild = INVALID_ID;
+	const ChildrenList& children = graph.at(parent);
+
+	for (const NodeId nodeId : children) {
+		if (idNodeMap.at(nodeId)->hasFlag(NodeFlags::GateWay)) {
+			gatewayChild = nodeId;
+			break;
+		}
+	}
+
+	return gatewayChild;
+}
+
+//*************************************************************************************************************
+//*************************************************************************************************************
+
+void Graph::markMultipleGatewayNodes() {
 	for (const pair<NodeId, Node*>& node : idNodeMap) {
 		Node* nodePtr = node.second;
 		if (!nodePtr->hasFlag(NodeFlags::GateWay)) {
@@ -879,7 +898,7 @@ void Game::getTurnInput() {
 //*************************************************************************************************************
 
 void Game::turnBegin() {
-	skynetNetwork.markDoubleGatewayNodes();
+	skynetNetwork.markMultipleGatewayNodes();
 }
 
 //*************************************************************************************************************
@@ -889,11 +908,15 @@ void Game::makeTurn() {
 	skynetNetwork.dijsktra(agentNodeId);
 
 	MinDijsktraPath minGatewayPath = skynetNetwork.findClosestFlaggedNode(NodeFlags::GateWay);
+	MinDijsktraPath minMultiGatewaysPath = skynetNetwork.findClosestFlaggedNode(NodeFlags::MutipleGatewaysChildren);
+	const size_t minMultiGatewaysPathSize = minMultiGatewaysPath.size();
+
 	NodeId firstToDelete = minGatewayPath[minGatewayPath.size() - 2];
 	NodeId secondToDelete = minGatewayPath.back();
 
-	if (minGatewayPath.size() > 1) {
-
+	if (minMultiGatewaysPathSize > 0 && (minMultiGatewaysPath.size() <= minGatewayPath.size())) {
+		firstToDelete = minMultiGatewaysPath.back();
+		secondToDelete = skynetNetwork.getGatewayChild(firstToDelete);
 	}
 
 	cout << firstToDelete << " " << secondToDelete << endl;
